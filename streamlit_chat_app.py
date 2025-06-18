@@ -2,50 +2,68 @@ import os
 import streamlit as st
 from together import Together
 
-# 1️⃣ Load API key from Streamlit secrets or environment variable
+# --- 1️⃣ Load API key & instantiate Together client ---
 api_key = st.secrets.get("together_ai_api_key") or os.getenv("TOGETHER_API_KEY")
 if not api_key:
-    st.error("🔑 Missing Together AI API key.\nSet `together_ai_api_key` in `.streamlit/secrets.toml` or `TOGETHER_API_KEY` env var.")
+    st.error(
+        "🔑 Missing Together AI API key.\n"
+        "Set `together_ai_api_key` in `.streamlit/secrets.toml` or `TOGETHER_API_KEY` env var."
+    )
     st.stop()
-
-# 2️⃣ Ensure the Together client picks up the key
+# Ensure the Together library picks up the key
 os.environ["TOGETHER_API_KEY"] = api_key
 client = Together(api_key=api_key)
 
-# 3️⃣ Initialize chat history
+# --- 2️⃣ Session state for chat history ---
 if "history" not in st.session_state:
     st.session_state.history = []
 
-# 4️⃣ Page config & title
-st.set_page_config(page_title="LLM Chat App", page_icon="🤖")
-st.title("🤖 Streamlit LLM Chat with Together AI API")
+# --- 3️⃣ Page setup ---
+st.set_page_config(page_title="Fast LLM Chat", page_icon="🤖")
+st.title("🤖 Fast Streamlit LLM Chat with Streaming")
 
-# 5️⃣ Function to call the API
-@st.cache_data
-def generate_response(prompt: str) -> str:
-    response = client.chat.completions.create(
-        model="deepseek-ai/DeepSeek-V3",  # change or parameterize if needed
-        messages=[{"role": "user", "content": prompt}]
-    )
-    return response.choices[0].message.content
+# --- 4️⃣ Supported Model ---
+MODEL_NAME = "deepseek-ai/DeepSeek-V3"  # update when additional models are available
 
-# 6️⃣ User input and button
+# --- 5️⃣ Streaming response function ---
+def stream_response(prompt: str) -> str:
+    """Stream tokens in real time from Together AI."""
+    try:
+        stream = client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[{"role": "user", "content": prompt}],
+            stream=True,
+        )
+    except Exception as e:
+        st.error(f"Model error: {e}")
+        return ""
+
+    placeholder = st.empty()
+    collected = ""
+    for chunk in stream:
+        # DeltaContent has attribute 'content'
+        delta = getattr(chunk.choices[0].delta, 'content', '') or ''
+        collected += delta
+        placeholder.markdown(f"**Bot:** {collected}")
+    return collected
+
+# --- 6️⃣ Input & Send button ---
 prompt = st.text_input("Your question:", key="input_box")
 if st.button("Send"):
     if not prompt.strip():
         st.warning("Please enter a question.")
     else:
-        with st.spinner("Fetching response..."):
-            try:
-                answer = generate_response(prompt)
-                st.session_state.history.append((prompt, answer))
-            except Exception as e:
-                st.error(f"API error: {e}")
+        # Display user message
+        st.chat_message("user").write(prompt)
+        # Stream and display bot response
+        with st.spinner("Thinking..."):
+            answer = stream_response(prompt)
+        # Save to history
+        if answer:
+            st.session_state.history.append(("assistant", answer))
 
-# 7️⃣ Display chat history
+# --- 7️⃣ Display full chat history ---
 if st.session_state.history:
     st.markdown("---")
-    st.header("Chat History")
-    for user_msg, bot_msg in reversed(st.session_state.history):
-        st.markdown(f"**You:** {user_msg}")
-        st.markdown(f"**Bot:** {bot_msg}")
+    for role, msg in st.session_state.history:
+        st.chat_message(role).write(msg)
